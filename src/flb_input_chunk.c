@@ -32,10 +32,14 @@ static void generate_chunk_name(struct flb_input_instance *in,
     (void) in;
 
     flb_time_get(&tm);
+    /*
+     * Keep generated filenames in strict sequential order.
+     * Example: 1584108371.999982747-138535.flb
+     */
     snprintf(out_buf, buf_size - 1,
-             "%i-%lu.%4lu.flb",
-             getpid(),
-             tm.tm.tv_sec, tm.tm.tv_nsec);
+             "%010lu.%09lu-%i.flb",
+             tm.tm.tv_sec, tm.tm.tv_nsec,
+             getpid());
 }
 
 ssize_t flb_input_chunk_get_size(struct flb_input_chunk *ic)
@@ -185,6 +189,7 @@ struct flb_input_chunk *flb_input_chunk_create(struct flb_input_instance *in,
 #ifdef FLB_HAVE_METRICS
     ic->total_records = 0;
 #endif
+    ic->time_create = time(NULL);
     msgpack_packer_init(&ic->mp_pck, ic, flb_input_chunk_write);
     mk_list_add(&ic->_head, &in->chunks);
 
@@ -398,6 +403,56 @@ int flb_input_chunk_set_up(struct flb_input_chunk *ic)
     return 0;
 }
 
+int flb_input_chunk_move_and_destroy(struct flb_input_chunk *ic)
+{
+    int ret;
+
+    ret = flb_input_chunk_move(ic->chunk, ic->in);
+    if (ret == 0) {
+        flb_input_chunk_destroy(ic, FLB_FALSE);
+    }
+
+    return ret;
+}
+
+int flb_input_chunk_move(struct cio_chunk *chunk, struct flb_input_instance *in)
+{
+    char* old_path;
+    char* stream_name;
+    char* chunk_name;
+    char new_path[PATH_MAX];
+    int ret;
+
+    if (cio_chunk_is_up(chunk) == CIO_TRUE) {
+        cio_chunk_down(chunk);
+    }
+
+    old_path = cio_chunk_get_path(chunk);
+    if (old_path == NULL) {
+        flb_error("[input chunk] %s requested to move a non-filesystem chunk",
+                  flb_input_name(in));
+        return -1;
+    }
+
+    stream_name = cio_chunk_get_stream_name(chunk);
+
+    chunk_name = basename(old_path);
+    if (chunk_name == NULL) {
+        flb_errno();
+        return -1;
+    }
+
+    sprintf(new_path, "%s/%s/%s", in->config->storage_move_dest, stream_name, chunk_name);
+    flb_debug("[input chunk] %s: move %s to %s", stream_name, chunk_name, new_path);
+
+    ret = rename(old_path, new_path);
+    if (ret != 0) {
+        flb_errno();
+        return -1;
+    }
+
+    return 0;
+}
 
 /* Append a RAW MessagPack buffer to the input instance */
 int flb_input_chunk_append_raw(struct flb_input_instance *in,
@@ -442,6 +497,7 @@ int flb_input_chunk_append_raw(struct flb_input_instance *in,
         flb_error("[input chunk] no available chunk");
         return -1;
     }
+    ic->time_update = time(NULL);
 
     /* We got the chunk, validate if is 'up' or 'down' */
     ret = flb_input_chunk_is_up(ic);
@@ -518,6 +574,13 @@ int flb_input_chunk_append_raw(struct flb_input_instance *in,
     if (in->routable == FLB_FALSE) {
         flb_input_chunk_destroy(ic, FLB_TRUE);
         return 0;
+    }
+
+    si = (struct flb_storage_input *) in->storage;
+    if (si->type == CIO_STORE_FS && in->config->storage_move_dest) {
+        if (cio_chunk_is_locked(ic->chunk) == CIO_TRUE) { 
+            return flb_input_chunk_move_and_destroy(ic);
+        }
     }
 
     /* Update memory counters and adjust limits if any */

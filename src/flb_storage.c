@@ -22,6 +22,7 @@
 #include <fluent-bit/flb_input.h>
 #include <fluent-bit/flb_log.h>
 #include <fluent-bit/flb_storage.h>
+#include <chunkio/cio_os.h>
 
 static void print_storage_info(struct flb_config *ctx, struct cio_ctx *cio)
 {
@@ -86,6 +87,8 @@ int flb_storage_input_create(struct cio_ctx *cio,
 {
     const char *name;
     struct flb_storage_input *si;
+    char stream_move_dest_path[PATH_MAX];
+    int ret;
     struct cio_stream *stream;
 
     /* storage config: get stream type */
@@ -110,6 +113,17 @@ int flb_storage_input_create(struct cio_ctx *cio,
     /* get stream name */
     name = flb_input_name(in);
 
+    if (in->storage_type == CIO_STORE_FS && in->config->storage_move_dest) {
+        sprintf(stream_move_dest_path, "%s/%s", in->config->storage_move_dest, name);
+        ret = cio_os_mkpath(stream_move_dest_path, 0755);
+        if (ret == -1) {
+            flb_errno();
+            flb_error("[storage] instance '%s': failed to create move destination dir %s",
+                      stream_move_dest_path);
+            return -1;
+        }
+    }
+
     /* create stream for input instance */
     stream = cio_stream_create(cio, name, in->storage_type);
     if (!stream) {
@@ -129,13 +143,22 @@ int flb_storage_input_create(struct cio_ctx *cio,
 
 void flb_storage_input_destroy(struct flb_input_instance *in)
 {
+    int move;
     struct mk_list *tmp;
     struct mk_list *head;
     struct flb_input_chunk *ic;
 
+    move = in->storage_type == CIO_STORE_FS
+        && in->config->storage_move_dest;
+    flb_info("[storage] destroying %s, move=%d", flb_input_name(in), move);
+
     /* Save current temporal data and destroy chunk references */
     mk_list_foreach_safe(head, tmp, &in->chunks) {
         ic = mk_list_entry(head, struct flb_input_chunk, _head);
+        if (move) {
+            flb_input_chunk_move_and_destroy(ic);
+            continue;
+        }
         flb_input_chunk_destroy(ic, FLB_FALSE);
     }
 

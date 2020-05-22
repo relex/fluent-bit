@@ -23,6 +23,7 @@
 #include <fluent-bit/flb_info.h>
 #include <fluent-bit/flb_input.h>
 #include <fluent-bit/flb_input_chunk.h>
+#include <fluent-bit/flb_storage.h>
 #include <fluent-bit/flb_output.h>
 #include <fluent-bit/flb_router.h>
 #include <fluent-bit/flb_config.h>
@@ -143,6 +144,8 @@ static int tasks_start(struct flb_input_instance *in,
 int flb_engine_dispatch(uint64_t id, struct flb_input_instance *in,
                         struct flb_config *config)
 {
+    struct flb_storage_input *si;
+    time_t now;
     int ret;
     int t_err;
     const char *buf_data;
@@ -157,6 +160,30 @@ int flb_engine_dispatch(uint64_t id, struct flb_input_instance *in,
 
     p = in->p;
     if (!p) {
+        return 0;
+    }
+
+    si = (struct flb_storage_input *) in->storage;
+    if (config->storage_move_dest && si->type == CIO_STORE_FS) {
+        now = time(NULL);
+        mk_list_foreach_safe(head, tmp, &in->chunks) {
+            ic = mk_list_entry(head, struct flb_input_chunk, _head);
+            /*
+             * Don't process or move open chunks immediately here - We need to
+             * keep chunk file numbers small and their sizes large.
+             *
+             * Move if:
+             *   - Chunk has been locked (full; limit reached)
+             *   - No update since "flush" seconds ago
+             *   - Been created since 2 * "flush" seconds ago
+             */
+            if (cio_chunk_is_locked(ic->chunk) == CIO_TRUE ||
+                now - ic->time_update >= config->flush ||
+                now - ic->time_create >= config->flush * 2) {
+
+                flb_input_chunk_move_and_destroy(ic);
+            }
+        }
         return 0;
     }
 

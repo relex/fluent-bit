@@ -312,6 +312,22 @@ int cio_chunk_is_locked(struct cio_chunk *ch)
     return ch->lock;
 }
 
+char* cio_chunk_get_path(struct cio_chunk *ch)
+{
+    struct cio_file *cf;
+
+    if (ch->st->type == CIO_STORE_FS) {
+        cf = (struct cio_file *) ch->backend;
+        return cf->path;
+    }
+    return NULL;
+}
+
+char* cio_chunk_get_stream_name(struct cio_chunk *ch)
+{
+    return ch->st->name;
+}
+
 /*
  * Start a transaction context: it keep a state of the current calculated
  * CRC32 (if enabled) and the current number of bytes in the content

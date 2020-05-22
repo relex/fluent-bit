@@ -148,11 +148,31 @@ static int sb_prepare_environment(struct flb_sb *ctx)
     int ret;
     struct mk_list *head;
     struct mk_list *c_head;
+    struct mk_list *c_tmp;
     struct cio_stream *stream;
     struct cio_chunk *chunk;
     struct cio_ctx *cio;
 
     cio = ctx->cio;
+
+    if (ctx->ins->config->storage_move_dest) {
+        mk_list_foreach(head, &cio->streams) {
+            stream = mk_list_entry(head, struct cio_stream, _head);
+            mk_list_foreach_safe(c_head, c_tmp, &stream->chunks) {
+                chunk = mk_list_entry(c_head, struct cio_chunk, _head);
+                ret = flb_input_chunk_move(chunk, ctx->ins);
+                if (ret == -1) {
+                    flb_error("[storage_backlog] could not move %s/%s",
+                              stream->name, chunk->name);
+                    continue;
+                }
+                cio_chunk_close(chunk, CIO_FALSE);
+            }
+        }
+
+        return 0;
+    }
+
     mk_list_foreach(head, &cio->streams) {
         stream = mk_list_entry(head, struct cio_stream, _head);
         mk_list_foreach(c_head, &stream->chunks) {

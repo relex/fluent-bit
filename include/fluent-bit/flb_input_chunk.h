@@ -30,13 +30,13 @@
  * This variable defines a 'hint' size for new Chunks created, this
  * value is passed to Chunk I/O.
  */
-#define FLB_INPUT_CHUNK_SIZE           262144  /* 256KB (hint) */
+#define FLB_INPUT_CHUNK_SIZE         16785408  /* 16MB + 8KB (hint) */
 
 /*
  * Defines a maximum size for a Chunk in the file system: note that despite
  * this is considered a limit, a Chunk size might get greater than this.
  */
-#define FLB_INPUT_CHUNK_FS_MAX_SIZE   2048000  /* 2MB */
+#define FLB_INPUT_CHUNK_FS_MAX_SIZE  16777216  /* 16MB */
 
 struct flb_input_chunk {
     int busy;                       /* buffer is being flushed  */
@@ -50,8 +50,12 @@ struct flb_input_chunk {
     off_t stream_off;               /* stream offset */
     msgpack_packer mp_pck;          /* msgpack packer */
     struct flb_input_instance *in;  /* reference to parent input instance */
+    time_t time_create;             /* time of creation in Epoch seconds */
+    time_t time_update;             /* time of last update in Epoch seconds */
     struct mk_list _head;
 };
+
+struct cio_chunk;
 
 struct flb_input_chunk *flb_input_chunk_create(struct flb_input_instance *in,
                                                const char *tag, int tag_len);
@@ -80,5 +84,7 @@ int flb_input_chunk_set_up_down(struct flb_input_chunk *ic);
 int flb_input_chunk_set_up(struct flb_input_chunk *ic);
 int flb_input_chunk_down(struct flb_input_chunk *ic);
 int flb_input_chunk_is_up(struct flb_input_chunk *ic);
+int flb_input_chunk_move_and_destroy(struct flb_input_chunk *ic);
+int flb_input_chunk_move(struct cio_chunk *chunk, struct flb_input_instance *in);
 
 #endif

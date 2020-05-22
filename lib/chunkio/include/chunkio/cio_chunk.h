@@ -55,6 +55,8 @@ char *cio_chunk_hash(struct cio_chunk *ch);
 int cio_chunk_lock(struct cio_chunk *ch);
 int cio_chunk_unlock(struct cio_chunk *ch);
 int cio_chunk_is_locked(struct cio_chunk *ch);
+char* cio_chunk_get_path(struct cio_chunk *ch);
+char* cio_chunk_get_stream_name(struct cio_chunk *ch);
 
 /* transaction handling */
 int cio_chunk_tx_begin(struct cio_chunk *ch);
