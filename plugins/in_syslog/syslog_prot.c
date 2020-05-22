@@ -18,6 +18,8 @@
  *  limitations under the License.
  */
 
+#define _GNU_SOURCE
+
 #include <fluent-bit/flb_input_plugin.h>
 #include <fluent-bit/flb_parser.h>
 #include <fluent-bit/flb_time.h>
@@ -30,6 +32,80 @@
 static inline void consume_bytes(char *buf, int bytes, int length)
 {
     memmove(buf, buf + bytes, length - bytes);
+}
+
+#define DYNAMIC_TAG_MAX 128
+
+// find and fill the value by msgpack format, e.g. \xA5ident\xA7my-appX...
+// https://github.com/msgpack/msgpack/blob/master/spec.md#str-format-family
+static int fill_field_value(char const *data, size_t const data_size, char const *name, char *out_val, char const *out_limit) {
+    size_t name_len = strlen(name);
+    unsigned char name_buf[1 + 31];
+    name_buf[0] = 0xA0 + name_len;
+    memcpy(name_buf + 1, name, name_len);
+    unsigned char *key_start = memmem(data, data_size, name_buf, name_len + 1);
+    if (key_start == NULL) {
+        flb_warn("[in_syslog] field '%s' missing in syslog parser definition", name);
+        return -1;
+    }
+    unsigned char *val_header_ptr = key_start + 1 + name_len;
+    unsigned char val_header = *val_header_ptr;
+    int val_len;
+    unsigned char *val_ptr;
+    if ((val_header & 0xA0) == 0xA0) {
+        val_len = val_header & ~0xA0;
+        val_ptr = key_start + 1 + name_len + 1;
+    } else if (val_header == 0xD9) {
+        val_len = *((unsigned char *) val_header_ptr + 1);
+        val_ptr = key_start + 2 + name_len + 1;
+    } else {
+        flb_warn("[in_syslog] field '%s' has invalid value header: 0x%02X", name, val_header);
+        return -1;
+    }
+    if (val_len > out_limit - out_val) {
+        val_len = out_limit - out_val;
+    }
+    memcpy(out_val, val_ptr, val_len);
+    return val_len;
+}
+
+static int tag_compose(char *tag, char *data, size_t data_size, char *out_tag, size_t out_tag_max) {
+    enum { FIELD_IDENT, FIELD_MSGID }; // first * is <ident>, second * is <msgid>
+    char *in = tag;
+    char *in_end = tag + strlen(tag);
+    char *out = out_tag;
+    char *out_limit = out_tag + out_tag_max - 1;
+    int next_field = FIELD_IDENT;
+    while (in < in_end && out < out_limit) {
+        char *e = strchr(in, '*');
+        if (e == NULL) {
+            e = in_end;
+        }
+        int len = e - in;
+        if (len > 0) {
+            memcpy(out, in, len);
+            in += len;
+            out += len;
+        }
+        if (*in == '*') {
+            int field_len = 0;
+            switch (next_field) {
+            case FIELD_IDENT:
+                field_len = fill_field_value(data, data_size, "ident", out, out_limit);
+                break;
+            case FIELD_MSGID:
+                field_len = fill_field_value(data, data_size, "msgid", out, out_limit);
+                break;
+            }
+            if (field_len > 0) {
+                out += field_len;
+            }
+            next_field++;
+            in++;
+        }
+    }
+    *out = '\0';
+    return out - out_tag;
 }
 
 static inline int pack_line(struct flb_syslog *ctx,
@@ -46,7 +122,13 @@ static inline int pack_line(struct flb_syslog *ctx,
     flb_time_append_to_msgpack(time, &mp_pck, 0);
     msgpack_sbuffer_write(&mp_sbuf, data, data_size);
 
-    flb_input_chunk_append_raw(ctx->ins, NULL, 0, mp_sbuf.data, mp_sbuf.size);
+    if (ctx->dynamic_tag) {
+        char tag[DYNAMIC_TAG_MAX];
+        int tag_len = tag_compose(ctx->ins->tag, mp_sbuf.data, mp_sbuf.size, tag, DYNAMIC_TAG_MAX);
+        flb_input_chunk_append_raw(ctx->ins, tag, tag_len, mp_sbuf.data, mp_sbuf.size);
+    } else {
+        flb_input_chunk_append_raw(ctx->ins, NULL, 0, mp_sbuf.data, mp_sbuf.size);
+    }
     msgpack_sbuffer_destroy(&mp_sbuf);
 
     return 0;
