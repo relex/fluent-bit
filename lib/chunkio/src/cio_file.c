@@ -751,7 +751,7 @@ int cio_file_write(struct cio_chunk *ch, const void *buf, size_t count)
             return -1;
         }
 
-        cio_log_debug(ch->ctx,
+        cio_log_trace(ch->ctx,
                       "[cio file] alloc_size from %lu to %lu",
                       cf->alloc_size, new_size);
 
